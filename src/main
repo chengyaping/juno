@@ -1,0 +1,132 @@
+#include <iostream>
+#include <vector>
+#include <map>
+#include <iterator>
+#include <TFile.h>
+#include <TTree.h>
+#include <TMath.h>
+#include <TRandom.h>
+#include <string>
+#include <sstream>
+#include <cassert>
+#include <TCanvas.h>
+#include <TGraph.h>
+#include <TAxis.h>
+#include "ElecSimClass.h"
+#include "Gen_Pulse.h"
+#include "Gen_Signal.h"
+int main(int argc, char* argv[]){
+
+
+    Gen_Pulse gen_pulse; // create a object to gen pulse
+    gen_pulse.initial();
+
+    Gen_Signal gen_signal; // create a object to gen signal
+    gen_signal.initial();
+
+
+    Root_IO* m_IO_p = new Root_IO;
+    Root_IO& m_IO = *m_IO_p;
+    m_IO.initial_Sig("MC-IBD_eplus-1000-10000.root",  //input root
+            "AdcSignals.root");                       //output root 
+    m_IO.initial_BK1("MC-K40-1000000.root", 0.14099e6);  // intput BK root file and BK evt rate, unit Hz
+    m_IO.initial_BK2("MC-Thorium-50000.root", 0.12341e6);
+    m_IO.initial_BK3("MC-Uranium-50000.root", 0.57714e6);
+
+
+    int PmtTotal = gen_pulse.get_PmtTotal();
+
+    ElecFeeCrate crate;  //create a crate to save signals
+
+    PmtData_Collection pd_vector ;
+    pd_vector.create_vector("PmtData.root",PmtTotal);// create  a PmtData vector
+    FeeSimData_Collection fsd_vector;
+    fsd_vector.create_vector(PmtTotal);// create a FeeSimData vector
+
+    Hit_Collection hit_vector_Sig;
+    Pulse_Collection pulse_vector;
+
+    int Sig_nEntries = m_IO.get_Sig_nEntries();
+
+    for(int Entry_index_Sig =0; Entry_index_Sig < 10; Entry_index_Sig ++){
+
+        m_IO.get_Sig_tree()->GetEntry(Entry_index_Sig);
+        cout<<"Entry_index_Sig:  " << Entry_index_Sig <<endl;
+
+        m_IO.set_sig_evt_idx(Entry_index_Sig);
+        m_IO.set_output_EventID(Entry_index_Sig);
+
+        hit_vector_Sig.reset();
+
+        hit_vector_Sig.create_vector(m_IO.get_Sig_nPhotons(),
+                m_IO.get_Sig_pmtID(),
+                m_IO.get_Sig_hitTime(),
+                m_IO.get_Sig_evt_GlobalTime());
+
+        // loop the Sig sub_hit_vector map: map<int id, vector<Hit> > . 
+        // loop a total Sig hit vector ,if two hit has a distance > 10000ns we divide the total Sig hit vector to two sub_vector.
+        // the map'key is the sub_vector id, the value is the sub_vector
+
+        for(int i=0; i < hit_vector_Sig.get_hit_map().size(); i++){      
+            cout<<"subEvtID_Sig: "<< i <<endl;
+            cout<<"sub_hit_vector_Sig size: "<<hit_vector_Sig.get_sub_vector(i).size()<<endl;        
+            
+            m_IO.set_subEvtID(i);// set the subEventID_Sig,e.g mapnum
+
+            m_IO.clear_unit_hit_vector(); //clear the unit hit vector
+            m_IO.add_sig_to_unit_hit_vector(hit_vector_Sig.get_sub_vector(i));
+
+            m_IO.mixed_Sig_BK(hit_vector_Sig.get_sub_vector(i));
+
+            //one Sig evt sub_hit_vector should add  many BK , we use the mixed_sub_hit_vector as the minimum unit
+
+            pulse_vector.reset();       
+            crate.reset(); //every min unit(sub_mixed_hit_vector) for waveform should clear crate
+            m_IO.reset();
+            m_IO.set_testTdc(); // just for draw waveform
+
+            if(m_IO.get_unit_hit_vector().size() > 0){
+
+                vector<Hit>::iterator it, unit_hit_vector_first, unit_hit_vector_end ;
+
+                unit_hit_vector_first = m_IO.get_unit_hit_vector().begin();
+                unit_hit_vector_end = m_IO.get_unit_hit_vector().end() ;
+
+                long double earliest_item = (*unit_hit_vector_first).hitTime();  // the earliest hitTime  unit ns
+                long double latest_item = (*(unit_hit_vector_end-1)).hitTime();  // the latest hitTime
+                cout<<"earliest hit time of unit_hit_vector:  " << earliest_item<<endl;
+                cout<<"latest hit time of unit_hit_vector:  " << latest_item<<endl;
+
+                gen_pulse.SetSimTime(earliest_item,latest_item);
+                gen_signal.SetSimTime(earliest_item,latest_item);
+
+
+                gen_pulse.generatePulses(pulse_vector.get_vector(),
+                        m_IO.get_unit_hit_vector(),
+                        pd_vector.get_vector()
+                        );
+
+                cout<<"////////////  END Generate pulse"<<endl;
+                ////////////////////////////////////////////////////////////////////////////////////
+                gen_signal.loadResponse();
+
+                gen_signal.generateSignals(pulse_vector.get_vector(),crate,fsd_vector.get_vector(),m_IO);
+
+            }
+
+        } 
+
+    } //end Entries
+
+    m_IO.get_input_file() -> Close();
+    m_IO.get_output_file() -> Write();
+    m_IO.get_output_file() -> Close();
+    delete m_IO_p;
+    // delete m_mixed;
+}
+
+
+
+
+
+
